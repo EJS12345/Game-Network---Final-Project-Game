@@ -141,7 +141,7 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         {
             if (AcceptAnyInput)
             {
-                rigid.velocity = new Vector2(input.HorizontalInput * moveSpeed, rigid.velocity.y);
+                rigid.linearVelocity = new Vector2(input.HorizontalInput * moveSpeed, rigid.linearVelocity.y);
 
                 CheckJumpInput(input);
 
@@ -149,11 +149,11 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
             }
             else
             {
-                rigid.velocity = Vector2.zero;
+                rigid.linearVelocity = Vector2.zero;
             }
         }
 
-        playerVisualController.UpdateScaleTransforms(rigid.velocity);
+        playerVisualController.UpdateScaleTransforms(rigid.linearVelocity);
     }
 
     private void CheckRespawnTimer()
@@ -196,7 +196,7 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
             }
         }
         
-        playerVisualController.RendererVisuals(rigid.velocity, playerWeaponController.IsHoldingShootingKey);
+        playerVisualController.RendererVisuals(rigid.linearVelocity, playerWeaponController.IsHoldingShootingKey);
     }
 
     private void CheckJumpInput(PlayerData input)
