@@ -1,19 +1,21 @@
+using System;
+using System.Collections.Generic;
 using Fusion;
-using Fusion.Addons.Physics;
+// Removed 'using Fusion.Addons.Physics;' because it conflicts with the 2D setup and was uninstalled.
 using TMPro;
 using UnityEngine;
 
 public class PlayerController : NetworkBehaviour, IBeforeUpdate
 {
     public bool AcceptAnyInput => PlayerIsAlive && !GameManager.MatchIsOver && !playerChatController.IsTyping;
-    
+
     [SerializeField] private PlayerChatController playerChatController;
     [SerializeField] private TextMeshProUGUI playerNameText;
     [SerializeField] private GameObject cam;
     [SerializeField] private float moveSpeed = 6;
     [SerializeField] private float jumpForce = 1000;
 
-    [Header("Grounded Vars")] 
+    [Header("Grounded Vars")]
     [SerializeField] private LayerMask groundLayer;
     [SerializeField] private Transform groundDetectionObj;
 
@@ -45,15 +47,15 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
     public override void Spawned()
     {
         Runner.SetIsSimulated(Object, true);
-        
+
         rigid = GetComponent<Rigidbody2D>();
         playerWeaponController = GetComponent<PlayerWeaponController>();
         playerVisualController = GetComponent<PlayerVisualController>();
         playerHealthController = GetComponent<PlayerHealthController>();
         _changeDetector = GetChangeDetector(ChangeDetector.Source.SimulationState, false);
-        
+
         GlobalManagers.Instance.PlayerSpawnerController.AddToEntry(base.Object.InputAuthority, base.Object);
-        
+
         SetLocalObjects();
         PlayerIsAlive = true;
     }
@@ -70,28 +72,18 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         }
         else
         {
-            //If this is not our InputAuthority player (aka a proxy)
-            //We want to make sure to set this nrb's InterpolationDataSource to Snapshots
-            //As it will automatically set all nrb's to be predicted regardless if it's a proxy or not, as we are doing full physics prediction.
-            //And setting it back to snapshots for proxies, will also make sure that lag compensation will work properly + be more cost efficient
             base.Object.RenderSource = RenderSource.Interpolated;
             base.Object.ForceRemoteRenderTimeframe = true;
         }
     }
 
-    // Sends RPC to the HOST (from a client)
-    //"sources" define which PEER can send the rpc
-    //The RpcTargets defines on which it is executed!
     [Rpc(sources: RpcSources.InputAuthority, RpcTargets.StateAuthority)]
     private void RpcSetNickName(NetworkString<_8> nickName)
     {
         playerName = nickName;
     }
 
-    //For example -
-    //if i set on spawned method a name called "banana"
-    // and then on fun i change another name which is again "banana"
-    private void OnNicknameChanged( NetworkString<_8> nickName)
+    private void OnNicknameChanged(NetworkString<_8> nickName)
     {
         SetPlayerNickname(nickName);
     }
@@ -109,19 +101,15 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
             serverNextSpawnPoint = GlobalManagers.Instance.PlayerSpawnerController.GetRandomSpawnPoint();
             respawnToNewPointTimer = TickTimer.CreateFromSeconds(Runner, RESPAWN_AMOUNT - 1);
         }
-        
+
         PlayerIsAlive = false;
         rigid.simulated = false;
         playerVisualController.TriggerDieAnimation();
         RespawnTimer = TickTimer.CreateFromSeconds(Runner, RESPAWN_AMOUNT);
     }
 
-    //Happens before anything else Fusion does, network application, reconlation etc 
-    //Called at the start of the Fusion Update loop, before the Fusion simulation loop.
-    //It fires before Fusion does ANY work, every screen refresh.
     public void BeforeUpdate()
     {
-        //We are the local machine
         if (Utils.IsLocalPlayer(Object) && AcceptAnyInput)
         {
             const string HORIZONTAL = "Horizontal";
@@ -129,14 +117,10 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         }
     }
 
-    //FUN
     public override void FixedUpdateNetwork()
     {
         CheckRespawnTimer();
 
-        // will return false if:
-        //the client does not have State Authority or Input Authority
-        // the requested type of input does not exist in the simulation
         if (Runner.TryGetInputForPlayer<PlayerData>(Object.InputAuthority, out var input))
         {
             if (AcceptAnyInput)
@@ -160,13 +144,14 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
     {
         if (PlayerIsAlive) return;
 
-        //Will only run on the server
         if (respawnToNewPointTimer.Expired(Runner))
         {
-            GetComponent<NetworkRigidbody2D>().Teleport(serverNextSpawnPoint);
+            // FIX: Removed the dependency on 'NetworkRigidbody' and directly teleported the native 2D Rigidbody instead.
+            rigid.position = serverNextSpawnPoint;
+
             respawnToNewPointTimer = TickTimer.None;
         }
-        
+
         if (RespawnTimer.Expired(Runner))
         {
             RespawnTimer = TickTimer.None;
@@ -195,7 +180,7 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
                     break;
             }
         }
-        
+
         playerVisualController.RendererVisuals(rigid.linearVelocity, playerWeaponController.IsHoldingShootingKey);
     }
 

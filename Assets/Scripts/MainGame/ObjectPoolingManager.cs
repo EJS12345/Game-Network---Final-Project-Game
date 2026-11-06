@@ -1,17 +1,12 @@
-using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
 using Fusion;
-using Unity.Mathematics;
 using UnityEngine;
 
 public class ObjectPoolingManager : MonoBehaviour, INetworkObjectProvider
 {
-    //The key is the PREFAB it self and the VALUE (the list) are the actual network gameobjects that had been spawned
-    //For example bullet PREFAB is the key 
-    //And the bullet spawned object ("bullet (clone))" is part of the list itself (the value)
-    private Dictionary<INetworkPrefabSource, List<NetworkObject>> prefabsThatHadBeenInstantiated = new();
+    // Key = the prefab source, Value = the instances spawned from it
+    private readonly Dictionary<INetworkPrefabSource, List<NetworkObject>> prefabsThatHadBeenInstantiated = new();
 
     private void Start()
     {
@@ -21,35 +16,52 @@ public class ObjectPoolingManager : MonoBehaviour, INetworkObjectProvider
         }
     }
 
-    //Called once runner.spawn is called
-    public NetworkObjectAcquireResult AcquirePrefabInstance(NetworkRunner runner, in NetworkPrefabAcquireContext context, out NetworkObject result)
+    public NetworkObjectAcquireResult AcquireInstance(NetworkRunner runner, in NetworkObjectAcquireContext context, out NetworkObject result)
     {
-        NetworkObject networkObject = null;
-        NetworkPrefabId prefabID = context.PrefabId;
+        result = null;
+
+        // Scene objects are not prefabs. Calling AsPrefabId on them throws,
+        // which is what broke Player 2. Leave them to the scene manager.
+        if (!context.TypeId.IsPrefab)
+        {
+            return NetworkObjectAcquireResult.Ignore;
+        }
+
+        NetworkPrefabId prefabID = context.TypeId.AsPrefabId;
         INetworkPrefabSource prefabSource = NetworkProjectConfig.Global.PrefabTable.GetSource(prefabID);
+
+        if (prefabSource == null)
+        {
+            Debug.LogError($"No prefab source found for prefab id {prefabID}");
+            return NetworkObjectAcquireResult.Failed;
+        }
+
         prefabsThatHadBeenInstantiated.TryGetValue(prefabSource, out var networkObjects);
 
-        bool foundMatch = false;
-        if (networkObjects?.Count > 0)
+        NetworkObject networkObject = null;
+
+        // Recycle an inactive instance if there is one
+        if (networkObjects != null)
         {
             foreach (var item in networkObjects)
             {
-                if (item != null && item.gameObject.activeSelf == false)
+                if (item != null && !item.gameObject.activeSelf)
                 {
-                    //todo object pooling aka recycle 
                     networkObject = item;
-    
-                    foundMatch = true;
                     break;
                 }
             }
         }
 
-        //Stays false when a complete new data that is not in our dic OR
-        //When the function is getting called too fast and no object is ready to be recycled
-        if (foundMatch == false)
+        // Nothing to recycle, so create a new one
+        if (networkObject == null)
         {
             networkObject = CreateObjectInstance(prefabSource);
+        }
+
+        if (networkObject == null)
+        {
+            return NetworkObjectAcquireResult.Failed;
         }
 
         result = networkObject;
@@ -59,36 +71,34 @@ public class ObjectPoolingManager : MonoBehaviour, INetworkObjectProvider
     private NetworkObject CreateObjectInstance(INetworkPrefabSource prefab)
     {
         prefab.Acquire(synchronous: true);
-        
-        // Check if it's already completed
+
         if (!prefab.IsCompleted)
         {
             Debug.LogError($"Prefab {prefab.Description} not immediately available");
-            // You might want to handle this case differently depending on your needs
+            return null;
         }
 
-            
         var obj = Instantiate(prefab.WaitForResult(), Vector3.zero, Quaternion.identity);
 
-        //If it contains, we shall add it as a child to our prefab instance
         if (prefabsThatHadBeenInstantiated.TryGetValue(prefab, out var instanceData))
         {
             instanceData.Add(obj);
         }
-        //If it's NOT in our list, we shall create data from scratch and add it 
         else
         {
-            var list = new List<NetworkObject> { obj };
-            prefabsThatHadBeenInstantiated.Add(prefab, list);
+            prefabsThatHadBeenInstantiated.Add(prefab, new List<NetworkObject> { obj });
         }
 
-        return obj; 
+        return obj;
     }
-    
-    //Called once runner.despawn is called
+
+    // Called once runner.Despawn is called
     public void ReleaseInstance(NetworkRunner runner, in NetworkObjectReleaseContext context)
     {
-        context.Object.gameObject.SetActive(false);
+        if (context.Object != null)
+        {
+            context.Object.gameObject.SetActive(false);
+        }
     }
 
     public NetworkPrefabId GetPrefabId(NetworkRunner runner, NetworkObjectGuid prefabGuid)
@@ -98,31 +108,12 @@ public class ObjectPoolingManager : MonoBehaviour, INetworkObjectProvider
 
     public void RemoveNetworkObjectFromDic(NetworkObject obj)
     {
-        if (prefabsThatHadBeenInstantiated.Count > 0)
+        foreach (var item in prefabsThatHadBeenInstantiated)
         {
-            foreach (var item in prefabsThatHadBeenInstantiated)
+            if (item.Value.Remove(obj))
             {
-                foreach (var networkObject in item.Value.Where(networkObject => networkObject == obj))
-                {
-                    item.Value.Remove(networkObject);
-                    break;
-                }
+                break;
             }
         }
     }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

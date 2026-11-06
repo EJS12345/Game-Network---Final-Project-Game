@@ -7,28 +7,29 @@ namespace Fusion.Editor {
 
   [ScriptedImporter(1, ExtensionWithoutDot, NetworkProjectConfigImporter.ImportQueueOffset + 1)]
   public class FusionWeaverTriggerImporter : ScriptedImporter {
-    public const string DependencyName = "FusionILWeaverTriggerImporter/ConfigHash";
     public const string Extension = "." + ExtensionWithoutDot;
     public const string ExtensionWithoutDot = "fusionweavertrigger";
-    
+
     [Tooltip("If enabled, runs the weaver when weaving-related changes are detected in the config file.")]
     public bool RunWeaverOnConfigChanges = true;
 
     public override void OnImportAsset(AssetImportContext ctx) {
-      ctx.DependsOnCustomDependency(DependencyName);
-      if (RunWeaverOnConfigChanges) {
+      ctx.DependsOnCustomDependency(DependencyHash.Name);
+      if (RunWeaverOnConfigChanges && !Application.isBatchMode) {
         ILWeaverUtils.RunWeaver();
       }
     }
 
-    private static void RefreshDependencyHash() {
-      if (EditorApplication.isCompiling || EditorApplication.isUpdating) {
-        return;
+    [FusionCustomDependencyEager]
+    static readonly FusionCustomDependency DependencyHash = new("FusionILWeaverTriggerImporter/ConfigHash", () => {
+      if (EditorApplication.isCompiling) {
+        return default;
       }
-      
+
       var configPath = NetworkProjectConfigUtilities.GetGlobalConfigPath();
+
       if (string.IsNullOrEmpty(configPath)) {
-        return;
+        return default;
       }
 
       try {
@@ -44,19 +45,19 @@ namespace Fusion.Editor {
         hash.Append(cfg.CheckRpcAttributeUsage ? 1 : 0);
         hash.Append(cfg.CheckNetworkedPropertiesBeingEmpty ? 1 : 0);
 
-        AssetDatabaseUtils.RegisterCustomDependencyWithMppmWorkaround(DependencyName, hash);
-        AssetDatabase.Refresh();
+        return hash;
       } catch {
         // ignore the error
+        return default;
       }
-    }
+    });
 
     private class Postprocessor : AssetPostprocessor {
       private static void OnPostprocessAllAssets(string[] importedAssets, string[] deletedAssets, string[] movedAssets, string[] movedFromAssetPaths) {
         foreach (var path in importedAssets) {
           if (path.EndsWith(NetworkProjectConfigImporter.Extension)) {
-            EditorApplication.delayCall -= RefreshDependencyHash;
-            EditorApplication.delayCall += RefreshDependencyHash;
+            DependencyHash.Refresh();
+            break;
           }
         }
       }

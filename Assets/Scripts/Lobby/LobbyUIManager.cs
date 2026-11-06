@@ -9,17 +9,21 @@ public class LobbyUIManager : MonoBehaviour
     {
         foreach (var lobby in lobbyPanels)
         {
+            if (lobby == null) continue;
             lobby.InitPanel(this);
         }
 
-        Instantiate(loadingCanvasControllerPrefab);
+        if (loadingCanvasControllerPrefab != null)
+        {
+            Instantiate(loadingCanvasControllerPrefab);
+        }
     }
 
     public void ShowPanel(LobbyPanelBase.LobbyPanelType type)
     {
         foreach (var lobby in lobbyPanels)
         {
-            if (lobby.PanelType == type)
+            if (lobby != null && lobby.PanelType == type)
             {
                 lobby.ShowPanel();
                 break;

@@ -9,8 +9,8 @@ namespace Fusion.Editor {
   using UnityEditor.PackageManager;
   using UnityEngine;
 
-  [ScriptedImporter(3, ExtensionWithoutDot, ImportQueueOffset)]
-  [HelpURL("https://doc.photonengine.com/fusion/current/manual/network-project-config")]
+  [ScriptedImporter(4, ExtensionWithoutDot, ImportQueueOffset)]
+  [HelpURL("https://doc.photonengine.com/fusion/v2/manual/network-project-config")]
   public class NetworkProjectConfigImporter : ScriptedImporter {
     public const string ExtensionWithoutDot = "fusion";
     public const string Extension = "." + ExtensionWithoutDot;
@@ -18,9 +18,6 @@ namespace Fusion.Editor {
 
     public const string FusionPrefabTag            = "FusionPrefab";
     public const string FusionPrefabTagSearchTerm  = "l:FusionPrefab";
-    public const string ScriptOrderDependencyName  = "Fusion.ScriptOrderDependency";
-    public const string AddressablesDependencyName = "Fusion.AddressablesDependency";
-    public const string PrefabsDependencyName      = "Fusion.PrefabsDependency";
 
     [Header("Prefabs")]
     [DrawInline]
@@ -30,7 +27,7 @@ namespace Fusion.Editor {
     [InitializeOnLoadMethod]
     static void RegisterAddressableEventListeners() {
       AssetDatabaseUtils.AddAddressableAssetsWithLabelMonitor(FusionPrefabTag, (hash) => {
-        AssetDatabaseUtils.RegisterCustomDependencyWithMppmWorkaround(AddressablesDependencyName, hash);
+        AddressablesDependency.Refresh();
       });
     }
 #endif
@@ -49,9 +46,9 @@ namespace Fusion.Editor {
       root.BehaviourMeta = CreateBehaviourMeta(ctx);
       root.PrefabOptions = PrefabOptions;
 
-      ctx.DependsOnCustomDependency(AddressablesDependencyName);
-      ctx.DependsOnCustomDependency(ScriptOrderDependencyName);
-      ctx.DependsOnCustomDependency(PrefabsDependencyName);
+      ctx.DependsOnCustomDependency(AddressablesDependency.Name);
+      ctx.DependsOnCustomDependency(ScriptOrderDependency.Name);
+      ctx.DependsOnCustomDependency(NetworkObjectPrefabDependency.Name);
     }
 
 
@@ -64,6 +61,7 @@ namespace Fusion.Editor {
         }
 
         EditorJsonUtility.FromJsonOverwrite(text, config);
+        config.Simulation.TickRateSelection.ConvertObsoleteIndicesToIntervals();
       } catch (System.ArgumentException ex) {
         throw new System.ArgumentException($"Failed to parse {path}: {ex.Message}");
       }
@@ -79,13 +77,13 @@ namespace Fusion.Editor {
       var paths = new List<string>();
 
       foreach (var it in AssetDatabaseUtils.IterateAssets<GameObject>(label: FusionPrefabTag)) {
-        var prefabPath = AssetDatabase.GetAssetPath(it.instanceID);
+        var prefabPath = AssetDatabase.GetAssetPath(it.GetObjectId());
         var context    = new NetworkAssetSourceFactoryContext(it);
 
         INetworkPrefabSource source = factory.TryCreatePrefabSource(context);
 
         if (source == null) {
-          ctx.LogImportError($"Unable to create prefab asset for {AssetDatabase.GetAssetPath(it.instanceID)} ({it.guid})");
+          ctx.LogImportError($"Unable to create prefab asset for {AssetDatabase.GetAssetPath(it.GetObjectId())} ({it.guid})");
           continue;
         }
 
@@ -150,8 +148,7 @@ namespace Fusion.Editor {
 
         foreach (var path in importedAssets) {
           if (HasSimulationBehaviours(path)) {
-            EditorApplication.delayCall -= RefreshScriptOrderDependencyHash;
-            EditorApplication.delayCall += RefreshScriptOrderDependencyHash;
+            ScriptOrderDependency.Refresh();
             break;
           }
         }
@@ -189,48 +186,62 @@ namespace Fusion.Editor {
 
         return false;
       }
-
-      private static void RefreshScriptOrderDependencyHash() {
-        var hash = CalculateScriptOrderDependencyHash();
-        FusionEditorLog.TraceImport($"Refreshing {ScriptOrderDependencyName} dependency hash: {hash}");
-        AssetDatabaseUtils.RegisterCustomDependencyWithMppmWorkaround(ScriptOrderDependencyName, hash);
-        AssetDatabase.Refresh();
-      }
-
-      private static Hash128 CalculateScriptOrderDependencyHash() {
-        var hash = new Hash128();
-
-        var scripts = MonoImporter.GetAllRuntimeMonoScripts();
-
-        foreach (var monoScript in scripts) {
-          var scriptType = monoScript.GetClass();
-          if (scriptType?.IsSubclassOf(typeof(SimulationBehaviour)) != true) {
-            continue;
-          }
-
-          var executionOrder = MonoImporter.GetExecutionOrder(monoScript);
-          if (executionOrder == 0) {
-            continue;
-          }
-
-          hash.Append(scriptType.FullName);
-          hash.Append(executionOrder);
-        }
-
-        return hash;
-      }
     }
 
-    public static void RefreshNetworkObjectPrefabHash() {
-      var hash = new Hash128();
+    [FusionCustomDependencyEager]
+    static readonly FusionCustomDependency ScriptOrderDependency = new("Fusion.ScriptOrderDependency", () => {
+      var entries = new List<(string AssemblyQualifiedName, int ExecutionOrder)>();
+      foreach (var monoScript in MonoImporter.GetAllRuntimeMonoScripts()) {
+        var scriptType = monoScript.GetClass();
 
-      foreach (var it in AssetDatabaseUtils.IterateAssets<GameObject>(label: FusionPrefabTag)) {
-        hash.Append(it.guid);
+        if (scriptType?.IsSubclassOf(typeof(SimulationBehaviour)) != true) {
+          continue;
+        }
+
+        var executionOrder = MonoImporter.GetExecutionOrder(monoScript);
+
+        if (executionOrder == 0) {
+          continue;
+        }
+
+        entries.Add((scriptType.AssemblyQualifiedName, executionOrder));
       }
 
-      FusionEditorLog.TraceImport($"Refreshing {PrefabsDependencyName} dependency hash: {hash}");
-      AssetDatabaseUtils.RegisterCustomDependencyWithMppmWorkaround(PrefabsDependencyName, hash);
-      AssetDatabase.Refresh();
+      // script enumeration order is not stable across processes and sessions
+      entries.Sort((a, b) => string.CompareOrdinal(a.AssemblyQualifiedName, b.AssemblyQualifiedName));
+
+      var hash = new Hash128();
+      foreach (var (assemblyQualifiedName, executionOrder) in entries) {
+        hash.Append(assemblyQualifiedName);
+        hash.Append(executionOrder);
+      }
+
+      return hash;
+    });
+
+    [FusionCustomDependencyEager]
+    static readonly FusionCustomDependency AddressablesDependency = new("Fusion.AddressablesDependency", () => {
+#if FUSION_ENABLE_ADDRESSABLES && !FUSION_DISABLE_ADDRESSABLES
+      return AssetDatabaseUtils.GetAddressablesContentHash();
+#else
+      return default;
+#endif
+    });
+
+    [FusionCustomDependencyEager]
+    static readonly FusionCustomDependency NetworkObjectPrefabDependency = new("Fusion.PrefabsDependency", () => {
+      var guids = new List<GUID>();
+      foreach (var it in AssetDatabaseUtils.IterateAssets<GameObject>(label: FusionPrefabTag)) {
+        guids.Add(it.GetAssetGuid());
+      }
+
+      // asset enumeration order is not stable across processes and sessions
+      guids.Sort();
+      return Hash128.Compute(guids);
+    });
+
+    public static void RebuildPrefabHash() {
+      NetworkObjectPrefabDependency.Refresh();
     }
   }
 }

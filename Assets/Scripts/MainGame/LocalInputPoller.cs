@@ -28,12 +28,12 @@ public class LocalInputPoller : NetworkBehaviour, INetworkRunnerCallbacks
 
     public void OnObjectExitAOI(NetworkRunner runner, NetworkObject obj, PlayerRef player)
     {
-        
+
     }
 
     public void OnObjectEnterAOI(NetworkRunner runner, NetworkObject obj, PlayerRef player)
     {
-       
+
     }
 
     public void OnPlayerJoined(NetworkRunner runner, PlayerRef player)
@@ -58,7 +58,7 @@ public class LocalInputPoller : NetworkBehaviour, INetworkRunnerCallbacks
 
     public void OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason)
     {
-      
+
     }
 
     public void OnDisconnectedFromServer(NetworkRunner runner)
@@ -89,17 +89,19 @@ public class LocalInputPoller : NetworkBehaviour, INetworkRunnerCallbacks
     {
     }
 
-    public void OnReliableDataReceived(NetworkRunner runner, PlayerRef player, ReliableKey key, ArraySegment<byte> data)
+    // Updated for Fusion 2.1.3 Signature
+    public void OnReliableDataReceived(NetworkRunner runner, PlayerRef player, ReliableKey key, System.ReadOnlySpan<byte> data)
     {
-        
+
     }
 
     public void OnReliableDataProgress(NetworkRunner runner, PlayerRef player, ReliableKey key, float progress)
     {
-       
+
     }
 
-    public void OnReliableDataReceived(NetworkRunner runner, PlayerRef player, ArraySegment<byte> data)
+    // Updated for Fusion 2.1.3 Signature
+    public void OnReliableDataReceived(NetworkRunner runner, PlayerRef player, System.ReadOnlySpan<byte> data)
     {
     }
 

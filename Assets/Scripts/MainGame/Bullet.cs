@@ -1,4 +1,3 @@
-using System.Collections;
 using System.Collections.Generic;
 using Fusion;
 using UnityEngine;
@@ -10,10 +9,12 @@ public class Bullet : NetworkBehaviour
     [SerializeField] private int bulletDmg = 10;
     [SerializeField] private float moveSpeed = 20;
     [SerializeField] private float lifeTimeAmount = 0.8f;
-    
+
     [Networked] private NetworkBool didHitSomething { get; set; }
     [Networked] private TickTimer lifeTimeTimer { get; set; }
+
     private Collider2D coll;
+    private readonly List<LagCompensatedHit> hits = new List<LagCompensatedHit>();
 
     public override void Spawned()
     {
@@ -47,44 +48,49 @@ public class Bullet : NetworkBehaviour
         var groundCollider = Runner.GetPhysicsScene2D()
             .OverlapBox(transform.position, coll.bounds.size, 0, groundLayerMask);
 
-        if (groundCollider != default)
+        if (groundCollider != null)
         {
             didHitSomething = true;
         }
     }
 
-    private List<LagCompensatedHit> hits = new List<LagCompensatedHit>();
+    private void CheckIfWeHitPlayerSafe() { }
+
     private void CheckIfWeHitAPlayer()
     {
+        // Safety guard: avoids NullReference spam if Lag Compensation is turned off
+        if (Runner.LagCompensation == null)
+        {
+            Debug.LogError("Lag Compensation is not enabled in NetworkProjectConfig.");
+            return;
+        }
+
         Runner.LagCompensation.OverlapBox(transform.position, coll.bounds.size, Quaternion.identity,
             Object.InputAuthority, hits, playerLayerMask);
 
-        if (hits.Count > 0)
-        {
-            foreach (var item in hits)
-            {
-                if (item.Hitbox != null)
-                {
-                    var player = item.Hitbox.GetComponentInParent<PlayerController>();
-                    var didNotHitOurOwnPlayer = player.Object.InputAuthority.PlayerId != Object.InputAuthority.PlayerId;
+        if (hits.Count == 0) return;
 
-                    if (didNotHitOurOwnPlayer && player.PlayerIsAlive)
-                    {
-                        if (Runner.IsServer)
-                        {
-                            player.GetComponent<PlayerHealthController>().Rpc_ReducePlayerHealth(bulletDmg);
-                        }
-                        
-                        didHitSomething = true;
-                        break;
-                    }
+        foreach (var item in hits)
+        {
+            if (item.Hitbox == null) continue;
+
+            var player = item.Hitbox.GetComponentInParent<PlayerController>();
+            if (player == null) continue;
+
+            var didNotHitOurOwnPlayer =
+                player.Object.InputAuthority.PlayerId != Object.InputAuthority.PlayerId;
+
+            if (didNotHitOurOwnPlayer && player.PlayerIsAlive)
+            {
+                if (Runner.IsServer &&
+                    player.TryGetComponent(out PlayerHealthController health))
+                {
+                    health.Rpc_ReducePlayerHealth(bulletDmg);
                 }
+
+                didHitSomething = true;
+                break;
             }
         }
     }
-    
-    
-    
-    
-    
 }
