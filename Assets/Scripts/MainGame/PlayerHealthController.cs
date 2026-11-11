@@ -1,5 +1,3 @@
-using System.Collections;
-using System.Collections.Generic;
 using Fusion;
 using TMPro;
 using UnityEngine;
@@ -13,39 +11,53 @@ public class PlayerHealthController : NetworkBehaviour
     [SerializeField] private Image fillAmountImg;
     [SerializeField] private TextMeshProUGUI healthAmountText;
 
-    [Networked] 
+    [Networked]
     private int currentHealthAmount { get; set; }
 
     private const int MAX_HEALTH_AMOUNT = 100;
     private PlayerController playerController;
     private Collider2D coll;
     private ChangeDetector _changeDetector;
-    
+
     public override void Spawned()
     {
         _changeDetector = GetChangeDetector(ChangeDetector.Source.SimulationState);
         coll = GetComponent<Collider2D>();
         playerController = GetComponent<PlayerController>();
-        currentHealthAmount = MAX_HEALTH_AMOUNT;
+
+        if (Object.HasStateAuthority)
+        {
+            currentHealthAmount = MAX_HEALTH_AMOUNT;
+        }
     }
 
     public override void FixedUpdateNetwork()
     {
-        if (Runner.IsServer && playerController.PlayerIsAlive)
+        // The server alone decides when the player dies.
+        if (!Object.HasStateAuthority) return;
+        if (!playerController.PlayerIsAlive) return;
+
+        if (currentHealthAmount <= 0)
         {
-            var didHitCollider = Runner.GetPhysicsScene2D()
-                .OverlapBox(transform.position, coll.bounds.size, 0, deathGroundLayerMask);
-            if (didHitCollider != default)
-            {
-                Rpc_ReducePlayerHealth(MAX_HEALTH_AMOUNT);
-            }
+            playerController.KillPlayer();
+            return;
+        }
+
+        var didHitCollider = Runner.GetPhysicsScene2D()
+            .OverlapBox(transform.position, coll.bounds.size, 0, deathGroundLayerMask);
+
+        if (didHitCollider != default)
+        {
+            currentHealthAmount = 0;
         }
     }
 
+    // Kept with the same signature because Bullet.cs calls it.
     [Rpc(RpcSources.StateAuthority, RpcTargets.StateAuthority)]
     public void Rpc_ReducePlayerHealth(int damage)
     {
-        currentHealthAmount -= damage;
+        if (!playerController.PlayerIsAlive) return;
+        currentHealthAmount = Mathf.Max(0, currentHealthAmount - damage);
     }
 
     public override void Render()
@@ -65,16 +77,14 @@ public class PlayerHealthController : NetworkBehaviour
 
     private void HealthAmountChanged(int oldHealth, int currentHealth)
     {
-        //Only if the current health is not the same as the prev one
-        if (currentHealth != oldHealth)
-        {
-            UpdateVisuals(currentHealth);
+        if (currentHealth == oldHealth) return;
 
-            //We did not respawn or just spawned
-            if (currentHealth != MAX_HEALTH_AMOUNT)
-            {
-               PlayerGotHit(currentHealth);
-            }
+        UpdateVisuals(currentHealth);
+
+        // Not a respawn or first spawn: show the hit effects (visuals only, no kill logic here).
+        if (currentHealth != MAX_HEALTH_AMOUNT)
+        {
+            PlayerGotHit();
         }
     }
 
@@ -85,33 +95,21 @@ public class PlayerHealthController : NetworkBehaviour
         healthAmountText.text = $"{healthAmount}/{MAX_HEALTH_AMOUNT}";
     }
 
-
-    private void PlayerGotHit(int healthAmount)
+    private void PlayerGotHit()
     {
-        if (Utils.IsLocalPlayer(Object))
-        {
-            Debug.Log("LOCAL PLAYER GOT HIT!");
+        if (!Utils.IsLocalPlayer(Object)) return;
 
-            const string BLOOD_HIT_CLIP_NAME = "BloodScreenHit";
-            bloodScreenHitAnimator.Play(BLOOD_HIT_CLIP_NAME);
+        const string BLOOD_HIT_CLIP_NAME = "BloodScreenHit";
+        bloodScreenHitAnimator.Play(BLOOD_HIT_CLIP_NAME);
 
-            var shakeAmount = new Vector3(0.2f, 0.1f);
-            playerCameraController.ShakeCamera(shakeAmount);
-        }
-
-        if (healthAmount <= 0)
-        {
-            playerController.KillPlayer();
-            Debug.Log("Player is DEAD!");
-        }
+        var shakeAmount = new Vector3(0.2f, 0.1f);
+        playerCameraController.ShakeCamera(shakeAmount);
     }
 
-
+    // Server only (called from PlayerController on respawn).
     public void ResetHealthAmountToMax()
     {
-        currentHealthAmount = MAX_HEALTH_AMOUNT; 
+        if (!Object.HasStateAuthority) return;
+        currentHealthAmount = MAX_HEALTH_AMOUNT;
     }
-    
-    
-    
 }

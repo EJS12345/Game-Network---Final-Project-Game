@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using Fusion;
 using Fusion.Sockets;
 using UnityEngine;
@@ -10,8 +11,7 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
     public event Action OnStartedRunnerConnection;
     public event Action OnPlayerJoinedSuccessfully;
 
-    // Raised when a start/join is declined or fails. The string is a player-friendly
-    // message (empty when the player simply cancelled).
+    // Raised when a start/join is declined or fails. Empty string = player cancelled.
     public event Action<string> OnStartGameFailed;
 
     public string LocalPlayerNickname { get; private set; }
@@ -24,14 +24,19 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
 
     private const string LOBBY_SCENE = "Lobby";
     private const int MAX_ROOM_NAME_LENGTH = 32;
+    private const float START_TIMEOUT_SECONDS = 20f;
 
     private NetworkRunner networkRunnerInstance;
     private bool isStarting;
     private bool cancelRequested;
 
+    public bool IsStarting => isStarting;
+
     public void ShutDownRunner()
     {
-        cancelRequested = isStarting;
+        if (!isStarting) return;
+
+        cancelRequested = true;
 
         if (networkRunnerInstance != null)
         {
@@ -46,7 +51,6 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
 
     public async void StartGame(GameMode mode, string roomName)
     {
-        // Matchmaking already in progress: ignore extra clicks.
         if (isStarting)
         {
             Debug.Log("A connection is already in progress, please wait.");
@@ -55,7 +59,6 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
 
         roomName = roomName?.Trim();
 
-        // Join Room needs a real code. Random / Create may pass an empty one.
         if (mode == GameMode.Client)
         {
             if (string.IsNullOrEmpty(roomName))
@@ -73,17 +76,20 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
 
         isStarting = true;
         cancelRequested = false;
-        OnStartedRunnerConnection?.Invoke();
+
+        CleanupRunner(networkRunnerInstance);
+        networkRunnerInstance = null;
+
+        Raise(OnStartedRunnerConnection);
+
+        NetworkRunner runner = null;
 
         try
         {
-            if (networkRunnerInstance == null)
-            {
-                networkRunnerInstance = Instantiate(networkRunnerPrefab);
-                networkRunnerInstance.AddCallbacks(this);
-            }
-
-            networkRunnerInstance.ProvideInput = true;
+            runner = Instantiate(networkRunnerPrefab);
+            networkRunnerInstance = runner;
+            runner.AddCallbacks(this);
+            runner.ProvideInput = true;
 
             Debug.Log($"StartGame -> mode: {mode}, room: '{roomName}'");
 
@@ -92,28 +98,42 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
                 GameMode = mode,
                 SessionName = roomName,
                 PlayerCount = 4,
-                SceneManager = networkRunnerInstance.GetComponent<INetworkSceneManager>(),
-                ObjectProvider = networkRunnerInstance.GetComponent<INetworkObjectProvider>()
+                SceneManager = runner.GetComponent<INetworkSceneManager>(),
+                ObjectProvider = runner.GetComponent<INetworkObjectProvider>()
             };
 
-            var result = await networkRunnerInstance.StartGame(startGameArgs);
+            var startTask = runner.StartGame(startGameArgs);
+            var finished = await Task.WhenAny(startTask, Task.Delay(TimeSpan.FromSeconds(START_TIMEOUT_SECONDS)));
+
+            // Timed out: stop the attempt so the UI can never hang forever.
+            if (finished != startTask)
+            {
+                startTask.ContinueWith(t => { var _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
+                runner.Shutdown();
+                CleanupRunner(runner);
+                if (networkRunnerInstance == runner) networkRunnerInstance = null;
+                Fail("The connection timed out. Please try again.");
+                return;
+            }
+
+            var result = await startTask;
 
             if (result.Ok)
             {
-                if (networkRunnerInstance != null && networkRunnerInstance.IsServer)
+                if (runner != null && runner.IsServer)
                 {
                     var unitySceneParams = new LoadSceneParameters(LoadSceneMode.Single);
-                    await networkRunnerInstance.LoadScene(SceneRef.FromIndex(mainGameSceneIndex), unitySceneParams);
+                    await runner.LoadScene(SceneRef.FromIndex(mainGameSceneIndex), unitySceneParams);
                 }
                 return;
             }
 
-            // Failed or cancelled: clean up and tell the UI.
-            CleanupRunner();
+            CleanupRunner(runner);
+            if (networkRunnerInstance == runner) networkRunnerInstance = null;
 
             if (cancelRequested)
             {
-                OnStartGameFailed?.Invoke(string.Empty);
+                Raise(OnStartGameFailed, string.Empty);
             }
             else
             {
@@ -124,12 +144,14 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
         catch (Exception e)
         {
             Debug.LogException(e);
-            CleanupRunner();
+            CleanupRunner(runner);
+            if (networkRunnerInstance == runner) networkRunnerInstance = null;
             Fail("Something went wrong while connecting. Please try again.");
         }
         finally
         {
             isStarting = false;
+            cancelRequested = false;
         }
     }
 
@@ -139,6 +161,8 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
         {
             case ShutdownReason.GameNotFound:
                 return $"Room '{roomName}' doesn't exist (yet). Check the code, or wait for the host to create it.";
+            case ShutdownReason.GameIdAlreadyExists:
+                return $"A room named '{roomName}' already exists. Pick another name or join it instead.";
             case ShutdownReason.GameClosed:
                 return "That room is closed.";
             case ShutdownReason.GameIsFull:
@@ -148,19 +172,37 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
         }
     }
 
+    // Calls every subscriber separately so one broken handler can't block the rest.
+    private static void Raise(Action action)
+    {
+        if (action == null) return;
+        foreach (Action handler in action.GetInvocationList())
+        {
+            try { handler(); }
+            catch (Exception e) { Debug.LogException(e); }
+        }
+    }
+
+    private static void Raise(Action<string> action, string message)
+    {
+        if (action == null) return;
+        foreach (Action<string> handler in action.GetInvocationList())
+        {
+            try { handler(message); }
+            catch (Exception e) { Debug.LogException(e); }
+        }
+    }
+
     private void Fail(string message)
     {
         Debug.LogWarning(message);
-        OnStartGameFailed?.Invoke(message);
+        Raise(OnStartGameFailed, message);
     }
 
-    private void CleanupRunner()
+    private static void CleanupRunner(NetworkRunner runner)
     {
-        if (networkRunnerInstance != null)
-        {
-            Destroy(networkRunnerInstance.gameObject);
-        }
-        networkRunnerInstance = null;
+        if (runner == null) return;
+        Destroy(runner.gameObject);
     }
 
     public void OnObjectExitAOI(NetworkRunner runner, NetworkObject obj, PlayerRef player) { }
@@ -170,32 +212,24 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
     public void OnPlayerJoined(NetworkRunner runner, PlayerRef player)
     {
         Debug.Log("OnPlayerJoined");
-        OnPlayerJoinedSuccessfully?.Invoke();
+        Raise(OnPlayerJoinedSuccessfully);
     }
 
-    public void OnPlayerLeft(NetworkRunner runner, PlayerRef player)
-    {
-        Debug.Log("OnPlayerLeft");
-    }
+    public void OnPlayerLeft(NetworkRunner runner, PlayerRef player) { Debug.Log("OnPlayerLeft"); }
 
     public void OnInput(NetworkRunner runner, NetworkInput input) { }
 
-    public void OnInputMissing(NetworkRunner runner, PlayerRef player, NetworkInput input)
-    {
-        Debug.Log("OnInputMissing");
-    }
+    public void OnInputMissing(NetworkRunner runner, PlayerRef player, NetworkInput input) { }
 
     public void OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason)
     {
         Debug.Log($"OnShutdown ({shutdownReason})");
 
-        if (runner == networkRunnerInstance)
+        if (!isStarting && runner == networkRunnerInstance)
         {
             networkRunnerInstance = null;
         }
 
-        // Only go back to the lobby if we're not already there.
-        // Reloading it after a failed join would wipe the loading/error UI.
         if (SceneManager.GetActiveScene().name != LOBBY_SCENE)
         {
             SceneManager.LoadScene(LOBBY_SCENE);
@@ -206,7 +240,7 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
 
     public void OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason) { Debug.Log("OnDisconnectedFromServer"); }
 
-    public void OnConnectRequest(NetworkRunner runner, NetworkRunnerCallbackArgs.ConnectRequest request, byte[] token) { Debug.Log("OnConnectRequest"); }
+    public void OnConnectRequest(NetworkRunner runner, NetworkRunnerCallbackArgs.ConnectRequest request, byte[] token) { }
 
     public void OnConnectFailed(NetworkRunner runner, NetAddress remoteAddress, NetConnectFailedReason reason) { Debug.Log("OnConnectFailed"); }
 

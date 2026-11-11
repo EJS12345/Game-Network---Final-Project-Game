@@ -1,3 +1,4 @@
+using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -5,7 +6,11 @@ public class LoadingCavnasController : MonoBehaviour
 {
     [SerializeField] private Animator animator;
     [SerializeField] private Button cancelBtn;
+
+    private const float FORCE_HIDE_DELAY = 1f;
+
     private NetworkRunnerController networkRunnerController;
+    private bool isShown;
 
     private void Start()
     {
@@ -15,12 +20,24 @@ public class LoadingCavnasController : MonoBehaviour
         networkRunnerController.OnStartGameFailed += OnStartGameFailed;
 
         cancelBtn.onClick.AddListener(networkRunnerController.ShutDownRunner);
-        this.gameObject.SetActive(false);
+        gameObject.SetActive(false);
+    }
+
+    // Safety net: if an event was missed, hide as soon as matchmaking is no longer running.
+    private void Update()
+    {
+        if (isShown && networkRunnerController != null && !networkRunnerController.IsStarting)
+        {
+            HideLoading();
+        }
     }
 
     private void OnStartedRunnerConnection()
     {
-        this.gameObject.SetActive(true);
+        gameObject.SetActive(true);
+        StopAllCoroutines();
+        isShown = true;
+
         const string CLIP_NAME = "In";
         StartCoroutine(Utils.PlayAnimAndSetStateWhenFinished(gameObject, animator, CLIP_NAME));
     }
@@ -30,7 +47,6 @@ public class LoadingCavnasController : MonoBehaviour
         HideLoading();
     }
 
-    // Join was declined, failed or cancelled: hide the loading screen.
     private void OnStartGameFailed(string message)
     {
         HideLoading();
@@ -38,10 +54,21 @@ public class LoadingCavnasController : MonoBehaviour
 
     private void HideLoading()
     {
+        isShown = false;
+
         if (!gameObject.activeInHierarchy) return;
+
+        StopAllCoroutines();
 
         const string CLIP_NAME = "Out";
         StartCoroutine(Utils.PlayAnimAndSetStateWhenFinished(gameObject, animator, CLIP_NAME, false));
+        StartCoroutine(ForceHide());
+    }
+
+    private IEnumerator ForceHide()
+    {
+        yield return new WaitForSecondsRealtime(FORCE_HIDE_DELAY);
+        gameObject.SetActive(false);
     }
 
     private void OnDestroy()

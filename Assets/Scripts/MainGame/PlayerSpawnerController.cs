@@ -7,8 +7,8 @@ public class PlayerSpawnerController : NetworkBehaviour, IPlayerJoined, IPlayerL
 {
     [SerializeField] private NetworkPrefabRef playerNetworkPrefab = NetworkPrefabRef.Empty;
     [SerializeField] private Transform[] spawnPoints;
-    private Dictionary<PlayerRef, NetworkObject> currentSpawnedPlayers = new Dictionary<PlayerRef, NetworkObject>();
-    
+    private readonly Dictionary<PlayerRef, NetworkObject> currentSpawnedPlayers = new Dictionary<PlayerRef, NetworkObject>();
+
     private void Awake()
     {
         if (GlobalManagers.Instance != null)
@@ -16,45 +16,46 @@ public class PlayerSpawnerController : NetworkBehaviour, IPlayerJoined, IPlayerL
             GlobalManagers.Instance.PlayerSpawnerController = this;
         }
     }
-    
+
     public void AddToEntry(PlayerRef player, NetworkObject obj)
     {
-        currentSpawnedPlayers.TryAdd(player, obj);
+        currentSpawnedPlayers[player] = obj;
     }
 
-    //nondeterministic
+    // Server only (called from PlayerController.KillPlayer).
     public Vector2 GetRandomSpawnPoint()
     {
-        var index = Random.Range(0, spawnPoints.Length - 1);
+        if (spawnPoints == null || spawnPoints.Length == 0) return Vector2.zero;
+
+        // The integer maximum is exclusive, so no "- 1" (it skipped the last point).
+        var index = Random.Range(0, spawnPoints.Length);
         return spawnPoints[index].position;
     }
 
     private void SpawnPlayer(PlayerRef playerRef)
     {
-        if (Runner.IsServer)
-        {
-            var index = playerRef.AsIndex % spawnPoints.Length;
-            var spawnPoint = spawnPoints[index].transform.position;
-            var playerObject = Runner.Spawn(playerNetworkPrefab, spawnPoint, Quaternion.identity, playerRef);
-            
-            Runner.SetPlayerObject(playerRef, playerObject);
-        }
+        if (!Runner.IsServer) return;
+
+        var index = playerRef.AsIndex % spawnPoints.Length;
+        var spawnPoint = spawnPoints[index].transform.position;
+        var playerObject = Runner.Spawn(playerNetworkPrefab, spawnPoint, Quaternion.identity, playerRef);
+
+        Runner.SetPlayerObject(playerRef, playerObject);
     }
 
     private void DespawnPlayer(PlayerRef playerRef)
     {
-        if (Runner.IsServer)
+        if (!Runner.IsServer) return;
+
+        if (currentSpawnedPlayers.TryGetValue(playerRef, out var playerNetworkObject) && playerNetworkObject != null)
         {
-            if (currentSpawnedPlayers.TryGetValue(playerRef, out var playerNetworkObject))
-            {
-                Runner.Despawn(playerNetworkObject);
-            }
-            
-            //Reset player object
-            Runner.SetPlayerObject(playerRef, null);
+            Runner.Despawn(playerNetworkObject);
         }
+
+        currentSpawnedPlayers.Remove(playerRef);
+        Runner.SetPlayerObject(playerRef, null);
     }
-    
+
     public void PlayerJoined(PlayerRef player)
     {
         SpawnPlayer(player);

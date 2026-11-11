@@ -1,7 +1,4 @@
-using System;
-using System.Collections.Generic;
 using Fusion;
-// Removed 'using Fusion.Addons.Physics;' because it conflicts with the 2D setup and was uninstalled.
 using TMPro;
 using UnityEngine;
 
@@ -37,6 +34,12 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
     private PlayerHealthController playerHealthController;
     private ChangeDetector _changeDetector;
 
+    // Local-only helpers
+    private bool teleportedThisDeath;
+    private bool visualAlive = true;
+
+    private const int RESPAWN_AMOUNT = 5;
+
     public enum PlayerInputButtons
     {
         None,
@@ -54,10 +57,19 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         playerHealthController = GetComponent<PlayerHealthController>();
         _changeDetector = GetChangeDetector(ChangeDetector.Source.SimulationState, false);
 
-        GlobalManagers.Instance.PlayerSpawnerController.AddToEntry(base.Object.InputAuthority, base.Object);
+        // Only the server writes networked state.
+        if (Object.HasStateAuthority)
+        {
+            PlayerIsAlive = true;
+        }
+
+        rigid.simulated = true;
+        visualAlive = true;
+        teleportedThisDeath = false;
+
+        GlobalManagers.Instance.PlayerSpawnerController.AddToEntry(Object.InputAuthority, Object);
 
         SetLocalObjects();
-        PlayerIsAlive = true;
     }
 
     private void SetLocalObjects()
@@ -72,8 +84,8 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         }
         else
         {
-            base.Object.RenderSource = RenderSource.Interpolated;
-            base.Object.ForceRemoteRenderTimeframe = true;
+            Object.RenderSource = RenderSource.Interpolated;
+            Object.ForceRemoteRenderTimeframe = true;
         }
     }
 
@@ -93,19 +105,15 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         playerNameText.text = nickName + " " + Object.InputAuthority.PlayerId;
     }
 
+    // Server only. Called once by PlayerHealthController when health reaches 0.
     public void KillPlayer()
     {
-        const int RESPAWN_AMOUNT = 5;
-        if (Runner.IsServer)
-        {
-            serverNextSpawnPoint = GlobalManagers.Instance.PlayerSpawnerController.GetRandomSpawnPoint();
-            respawnToNewPointTimer = TickTimer.CreateFromSeconds(Runner, RESPAWN_AMOUNT - 1);
-        }
+        if (!Object.HasStateAuthority || !PlayerIsAlive) return;
 
-        PlayerIsAlive = false;
-        rigid.simulated = false;
-        playerVisualController.TriggerDieAnimation();
+        serverNextSpawnPoint = GlobalManagers.Instance.PlayerSpawnerController.GetRandomSpawnPoint();
+        respawnToNewPointTimer = TickTimer.CreateFromSeconds(Runner, RESPAWN_AMOUNT - 1);
         RespawnTimer = TickTimer.CreateFromSeconds(Runner, RESPAWN_AMOUNT);
+        PlayerIsAlive = false;
     }
 
     public void BeforeUpdate()
@@ -119,7 +127,7 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
 
     public override void FixedUpdateNetwork()
     {
-        CheckRespawnTimer();
+        HandleDeathAndRespawn();
 
         if (Runner.TryGetInputForPlayer<PlayerData>(Object.InputAuthority, out var input))
         {
@@ -140,31 +148,56 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         playerVisualController.UpdateScaleTransforms(rigid.linearVelocity);
     }
 
-    private void CheckRespawnTimer()
+    private void HandleDeathAndRespawn()
     {
-        if (PlayerIsAlive) return;
-
-        if (respawnToNewPointTimer.Expired(Runner))
+        if (PlayerIsAlive)
         {
-            // FIX: Removed the dependency on 'NetworkRigidbody' and directly teleported the native 2D Rigidbody instead.
-            rigid.position = serverNextSpawnPoint;
+            teleportedThisDeath = false;
 
-            respawnToNewPointTimer = TickTimer.None;
+            // Coming back to life: re-enable physics with no leftover speed.
+            if (!rigid.simulated)
+            {
+                rigid.simulated = true;
+                rigid.linearVelocity = Vector2.zero;
+                rigid.angularVelocity = 0f;
+            }
+            return;
         }
 
-        if (RespawnTimer.Expired(Runner))
+        // Dead: physics follows the networked state on every machine.
+        if (rigid.simulated) rigid.simulated = false;
+
+        // Move to the new spawn point once, a second before respawning.
+        if (!teleportedThisDeath && respawnToNewPointTimer.Expired(Runner))
+        {
+            teleportedThisDeath = true;
+            TeleportTo(serverNextSpawnPoint);
+        }
+
+        // Only the server brings the player back.
+        if (Object.HasStateAuthority && RespawnTimer.Expired(Runner))
         {
             RespawnTimer = TickTimer.None;
-            RespawnPlayer();
+            PlayerIsAlive = true;
+            playerHealthController.ResetHealthAmountToMax();
         }
     }
 
-    private void RespawnPlayer()
+    private void TeleportTo(Vector2 position)
     {
-        PlayerIsAlive = true;
-        rigid.simulated = true;
-        playerVisualController.TriggerRespawnAnimation();
-        playerHealthController.ResetHealthAmountToMax();
+        // Move both the transform and the body: a non-simulated body doesn't update the transform.
+        transform.position = position;
+        rigid.position = position;
+        rigid.linearVelocity = Vector2.zero;
+        rigid.angularVelocity = 0f;
+
+        // Avoids a visible slide across the map on remote players.
+        if (TryGetComponent(out NetworkTransform netTransform))
+        {
+            netTransform.Teleport((Vector3)position);
+        }
+
+        Physics2D.SyncTransforms();
     }
 
     public override void Render()
@@ -179,6 +212,15 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
                     OnNicknameChanged(currentName);
                     break;
             }
+        }
+
+        // Death/respawn animations follow the networked state, once per change.
+        if (PlayerIsAlive != visualAlive)
+        {
+            visualAlive = PlayerIsAlive;
+
+            if (visualAlive) playerVisualController.TriggerRespawnAnimation();
+            else playerVisualController.TriggerDieAnimation();
         }
 
         playerVisualController.RendererVisuals(rigid.linearVelocity, playerWeaponController.IsHoldingShootingKey);
@@ -202,7 +244,10 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
 
     public override void Despawned(NetworkRunner runner, bool hasState)
     {
-        GlobalManagers.Instance.ObjectPoolingManager.RemoveNetworkObjectFromDic(Object);
+        if (GlobalManagers.Instance != null && GlobalManagers.Instance.ObjectPoolingManager != null)
+        {
+            GlobalManagers.Instance.ObjectPoolingManager.RemoveNetworkObjectFromDic(Object);
+        }
         Destroy(gameObject);
     }
 
