@@ -16,8 +16,8 @@ public class GameManager : NetworkBehaviour
     [Networked] private TickTimer matchTimer { get; set; }
     [Networked] private NetworkBool matchOver { get; set; }
 
-    // Local only: makes sure the game-over event fires once per machine.
     private bool gameOverRaised;
+    private bool loggedFirstSync;
 
     private void Awake()
     {
@@ -33,9 +33,12 @@ public class GameManager : NetworkBehaviour
 
         MatchIsOver = false;
         gameOverRaised = false;
+        loggedFirstSync = false;
 
         if (cam != null) cam.gameObject.SetActive(false);
         if (timerText != null) timerText.text = "--:--";
+
+        Debug.Log($"[GameManager] Spawned. IsServer={Runner.IsServer}, timerAmount={matchTimerAmount}");
 
         if (Runner.IsServer)
         {
@@ -44,7 +47,6 @@ public class GameManager : NetworkBehaviour
         }
     }
 
-    // Only the server decides when the match ends.
     public override void FixedUpdateNetwork()
     {
         if (!Runner.IsServer || matchOver) return;
@@ -53,16 +55,17 @@ public class GameManager : NetworkBehaviour
         {
             matchOver = true;
             matchTimer = TickTimer.None;
-            Debug.Log("Match timer had ended");
+            Debug.Log("[GameManager] Match timer ended");
         }
     }
 
-    // UI and the game-over event run once per frame on every player.
     public override void Render()
     {
+        if (timerText == null) return;
+
         if (matchOver)
         {
-            if (timerText != null) timerText.text = "00:00";
+            timerText.text = "00:00";
 
             if (!gameOverRaised)
             {
@@ -75,8 +78,17 @@ public class GameManager : NetworkBehaviour
 
         var remaining = matchTimer.RemainingTime(Runner);
 
-        // Timer hasn't synced yet (late join): keep the placeholder.
-        if (!remaining.HasValue) return;
+        if (!remaining.HasValue)
+        {
+            timerText.text = "--:--";   // not synced yet
+            return;
+        }
+
+        if (!loggedFirstSync)
+        {
+            loggedFirstSync = true;
+            Debug.Log($"[GameManager] Timer synced. IsServer={Runner.IsServer}, remaining={remaining.Value:F1}s");
+        }
 
         int totalSeconds = Mathf.CeilToInt(remaining.Value);
         timerText.text = $"{totalSeconds / 60:D2}:{totalSeconds % 60:D2}";
