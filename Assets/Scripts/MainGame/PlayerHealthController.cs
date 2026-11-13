@@ -33,7 +33,7 @@ public class PlayerHealthController : NetworkBehaviour
 
     public override void FixedUpdateNetwork()
     {
-        // The server alone decides when the player dies.
+        // The server alone decides when the player dies
         if (!Object.HasStateAuthority) return;
         if (!playerController.PlayerIsAlive) return;
 
@@ -52,7 +52,7 @@ public class PlayerHealthController : NetworkBehaviour
         }
     }
 
-    // Kept with the same signature because Bullet.cs calls it.
+    // Kept with the same signature because Bullet.cs calls it
     [Rpc(RpcSources.StateAuthority, RpcTargets.StateAuthority)]
     public void Rpc_ReducePlayerHealth(int damage)
     {
@@ -81,7 +81,6 @@ public class PlayerHealthController : NetworkBehaviour
 
         UpdateVisuals(currentHealth);
 
-        // Not a respawn or first spawn: show the hit effects (visuals only, no kill logic here).
         if (currentHealth != MAX_HEALTH_AMOUNT)
         {
             PlayerGotHit();
@@ -106,7 +105,7 @@ public class PlayerHealthController : NetworkBehaviour
         playerCameraController.ShakeCamera(shakeAmount);
     }
 
-    // Server only (called from PlayerController on respawn).
+    // Called from PlayerController on respawn
     public void ResetHealthAmountToMax()
     {
         if (!Object.HasStateAuthority) return;

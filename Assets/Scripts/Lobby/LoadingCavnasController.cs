@@ -23,7 +23,7 @@ public class LoadingCavnasController : MonoBehaviour
         gameObject.SetActive(false);
     }
 
-    // Safety net: if an event was missed, hide as soon as matchmaking is no longer running.
+    // Safety net: if an event was missed, hide as soon as matchmaking is no longer running
     private void Update()
     {
         if (isShown && networkRunnerController != null && !networkRunnerController.IsStarting)

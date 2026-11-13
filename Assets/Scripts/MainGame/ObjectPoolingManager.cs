@@ -5,7 +5,7 @@ using UnityEngine;
 
 public class ObjectPoolingManager : MonoBehaviour, INetworkObjectProvider
 {
-    // Key = the prefab source, Value = the instances spawned from it
+
     private readonly Dictionary<INetworkPrefabSource, List<NetworkObject>> prefabsThatHadBeenInstantiated = new();
 
     private void Start()
@@ -20,8 +20,6 @@ public class ObjectPoolingManager : MonoBehaviour, INetworkObjectProvider
     {
         result = null;
 
-        // Scene objects are not prefabs. Calling AsPrefabId on them throws,
-        // which is what broke Player 2. Leave them to the scene manager.
         if (!context.TypeId.IsPrefab)
         {
             return NetworkObjectAcquireResult.Ignore;
@@ -53,7 +51,6 @@ public class ObjectPoolingManager : MonoBehaviour, INetworkObjectProvider
             }
         }
 
-        // Nothing to recycle, so create a new one
         if (networkObject == null)
         {
             networkObject = CreateObjectInstance(prefabSource);
@@ -92,7 +89,7 @@ public class ObjectPoolingManager : MonoBehaviour, INetworkObjectProvider
         return obj;
     }
 
-    // Called once runner.Despawn is called
+    // Called once runner, Despawn is called
     public void ReleaseInstance(NetworkRunner runner, in NetworkObjectReleaseContext context)
     {
         if (context.Object != null)

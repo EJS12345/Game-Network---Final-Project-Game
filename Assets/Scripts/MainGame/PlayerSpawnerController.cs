@@ -22,12 +22,10 @@ public class PlayerSpawnerController : NetworkBehaviour, IPlayerJoined, IPlayerL
         currentSpawnedPlayers[player] = obj;
     }
 
-    // Server only (called from PlayerController.KillPlayer).
     public Vector2 GetRandomSpawnPoint()
     {
         if (spawnPoints == null || spawnPoints.Length == 0) return Vector2.zero;
 
-        // The integer maximum is exclusive, so no "- 1" (it skipped the last point).
         var index = Random.Range(0, spawnPoints.Length);
         return spawnPoints[index].position;
     }

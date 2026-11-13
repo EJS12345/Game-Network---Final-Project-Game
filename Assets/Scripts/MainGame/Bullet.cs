@@ -58,7 +58,7 @@ public class Bullet : NetworkBehaviour
 
     private void CheckIfWeHitAPlayer()
     {
-        // Safety guard: avoids NullReference spam if Lag Compensation is turned off
+        // Safety guard - avoids NullReference spam if Lag Compensation is turned off
         if (Runner.LagCompensation == null)
         {
             Debug.LogError("Lag Compensation is not enabled in NetworkProjectConfig.");

@@ -105,7 +105,6 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         playerNameText.text = nickName + " " + Object.InputAuthority.PlayerId;
     }
 
-    // Server only. Called once by PlayerHealthController when health reaches 0.
     public void KillPlayer()
     {
         if (!Object.HasStateAuthority || !PlayerIsAlive) return;
@@ -154,7 +153,6 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
         {
             teleportedThisDeath = false;
 
-            // Coming back to life: re-enable physics with no leftover speed.
             if (!rigid.simulated)
             {
                 rigid.simulated = true;
@@ -164,10 +162,9 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
             return;
         }
 
-        // Dead: physics follows the networked state on every machine.
         if (rigid.simulated) rigid.simulated = false;
 
-        // Move to the new spawn point once, a second before respawning.
+        // Move to the new spawn point once, a second before respawning
         if (!teleportedThisDeath && respawnToNewPointTimer.Expired(Runner))
         {
             teleportedThisDeath = true;
@@ -185,13 +182,12 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
 
     private void TeleportTo(Vector2 position)
     {
-        // Move both the transform and the body: a non-simulated body doesn't update the transform.
+        // Move both the transform and the body: a non-simulated body doesn't update the transform
         transform.position = position;
         rigid.position = position;
         rigid.linearVelocity = Vector2.zero;
         rigid.angularVelocity = 0f;
 
-        // Avoids a visible slide across the map on remote players.
         if (TryGetComponent(out NetworkTransform netTransform))
         {
             netTransform.Teleport((Vector3)position);
@@ -214,7 +210,7 @@ public class PlayerController : NetworkBehaviour, IBeforeUpdate
             }
         }
 
-        // Death/respawn animations follow the networked state, once per change.
+        // Death/respawn animations follow the networked state, once per change
         if (PlayerIsAlive != visualAlive)
         {
             visualAlive = PlayerIsAlive;

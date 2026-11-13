@@ -11,7 +11,7 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
     public event Action OnStartedRunnerConnection;
     public event Action OnPlayerJoinedSuccessfully;
 
-    // Raised when a start/join is declined or fails. Empty string = player cancelled.
+    // Raised when a start/join is declined or fails. Empty string = player cancelled
     public event Action<string> OnStartGameFailed;
 
     public string LocalPlayerNickname { get; private set; }
@@ -105,7 +105,6 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
             var startTask = runner.StartGame(startGameArgs);
             var finished = await Task.WhenAny(startTask, Task.Delay(TimeSpan.FromSeconds(START_TIMEOUT_SECONDS)));
 
-            // Timed out: stop the attempt so the UI can never hang forever.
             if (finished != startTask)
             {
                 startTask.ContinueWith(t => { var _ = t.Exception; }, TaskContinuationOptions.OnlyOnFaulted);
@@ -172,7 +171,7 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
         }
     }
 
-    // Calls every subscriber separately so one broken handler can't block the rest.
+    // Calls every subscriber separately so one broken handler can't block the rest
     private static void Raise(Action action)
     {
         if (action == null) return;
