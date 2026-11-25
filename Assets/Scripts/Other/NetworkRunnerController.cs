@@ -29,18 +29,28 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
     private NetworkRunner networkRunnerInstance;
     private bool isStarting;
     private bool cancelRequested;
+    private bool isShuttingDown;
 
     public bool IsStarting => isStarting;
 
+    // Used by BOTH the Cancel button (while connecting) and Return to lobby (during a match).
     public void ShutDownRunner()
     {
-        if (!isStarting) return;
+        // Ignore repeated clicks while a shutdown is already running.
+        if (isShuttingDown) return;
 
-        cancelRequested = true;
+        // It's only a "cancel" if we're still connecting.
+        cancelRequested = isStarting;
 
         if (networkRunnerInstance != null)
         {
+            isShuttingDown = true;
             networkRunnerInstance.Shutdown();
+        }
+        else
+        {
+            // No runner left: just make sure we end up in the lobby.
+            GoToLobby();
         }
     }
 
@@ -75,6 +85,7 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
         }
 
         isStarting = true;
+        isShuttingDown = false;
         cancelRequested = false;
 
         CleanupRunner(networkRunnerInstance);
@@ -204,6 +215,14 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
         Destroy(runner.gameObject);
     }
 
+    private static void GoToLobby()
+    {
+        if (SceneManager.GetActiveScene().name != LOBBY_SCENE)
+        {
+            SceneManager.LoadScene(LOBBY_SCENE);
+        }
+    }
+
     public void OnObjectExitAOI(NetworkRunner runner, NetworkObject obj, PlayerRef player) { }
 
     public void OnObjectEnterAOI(NetworkRunner runner, NetworkObject obj, PlayerRef player) { }
@@ -224,20 +243,34 @@ public class NetworkRunnerController : MonoBehaviour, INetworkRunnerCallbacks
     {
         Debug.Log($"OnShutdown ({shutdownReason})");
 
-        if (!isStarting && runner == networkRunnerInstance)
+        // While connecting, StartGame() does its own cleanup. Otherwise clean up here.
+        if (!isStarting)
         {
-            networkRunnerInstance = null;
+            if (runner == networkRunnerInstance)
+            {
+                networkRunnerInstance = null;
+            }
+
+            // Remove the dead runner so the next game starts from a clean state.
+            CleanupRunner(runner);
         }
 
-        if (SceneManager.GetActiveScene().name != LOBBY_SCENE)
-        {
-            SceneManager.LoadScene(LOBBY_SCENE);
-        }
+        isShuttingDown = false;
+        GoToLobby();
     }
 
     public void OnConnectedToServer(NetworkRunner runner) { Debug.Log("OnConnectedToServer"); }
 
-    public void OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason) { Debug.Log("OnDisconnectedFromServer"); }
+    // The host left or the connection dropped: leave the match instead of staying stuck in it.
+    public void OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason)
+    {
+        Debug.Log($"OnDisconnectedFromServer ({reason})");
+
+        if (!isStarting && runner == networkRunnerInstance)
+        {
+            ShutDownRunner();
+        }
+    }
 
     public void OnConnectRequest(NetworkRunner runner, NetworkRunnerCallbackArgs.ConnectRequest request, byte[] token) { }
 
